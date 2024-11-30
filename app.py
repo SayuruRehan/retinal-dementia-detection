@@ -10,7 +10,7 @@ from tensorflow.keras.models import load_model  # type: ignore
 from albumentations import Compose, HorizontalFlip, VerticalFlip, ShiftScaleRotate, RandomBrightnessContrast, ElasticTransform
 
 import sys
-sys.path.append('D:/Projects/retinal-dementia-detection/unet-model')
+sys.path.append('unet-model')
 from model import attentionunet
 # Load the pre-trained segmentation model
 input_shape = (256, 256, 1)
@@ -150,7 +150,7 @@ def main():
         left_eye_image = cv2.imdecode(np.frombuffer(uploaded_left_eye.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
 
         # Load the model
-        model_path = 'D:/Projects/retinal-dementia-detection/unet-model/Trained models/retina_attentionUnet_150epochs.hdf5'
+        model_path = 'unet-model/Trained models/retina_attentionUnet_150epochs.hdf5'
         model = load_segmentation_model(model_path)
 
         # Process both images
