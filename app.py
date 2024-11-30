@@ -1,8 +1,4 @@
-import sys
-sys.path.append('unet-model')
-from model import attentionunet
-
-import os
+import streamlit as st
 import cv2
 import numpy as np
 import pandas as pd
@@ -10,12 +6,13 @@ from skimage.morphology import skeletonize
 from skimage.measure import label
 from scipy.spatial.distance import euclidean
 from scipy.stats import linregress
+from tensorflow.keras.models import load_model  # type: ignore
 from albumentations import Compose, HorizontalFlip, VerticalFlip, ShiftScaleRotate, RandomBrightnessContrast, ElasticTransform
 
+import sys
+sys.path.append('D:/Projects/retinal-dementia-detection/unet-model')
+from model import attentionunet
 # Load the pre-trained segmentation model
-from tensorflow.keras.models import load_model
-
-# Load your segmentation model
 input_shape = (256, 256, 1)
 
 def load_segmentation_model(model_path):
@@ -39,10 +36,9 @@ def augment_image_realistic(image):
 
 
 # Preprocessing Function
-def preprocess_image(image_path, target_size=256):
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+def preprocess_image(image, target_size=256):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    img_clahe = clahe.apply(img)
+    img_clahe = clahe.apply(image)
     img_blur = cv2.GaussianBlur(img_clahe, (5, 5), 0)
     img_padded = pad_to_square(img_blur, target_size)
     img_normalized = img_padded / 255.0
@@ -104,8 +100,8 @@ def calculate_cra_or_crv(diameters, constant):
     return diameters[0] if diameters else None
 
 # Image Processing
-def process_image(image_path, model, is_augmented=False, aug_index=None):
-    preprocessed_img = preprocess_image(image_path)
+def process_image(image, model):
+    preprocessed_img = preprocess_image(image)
     segmented_output = model.predict(preprocessed_img)[0, :, :, 0]
     skeleton = skeletonize(segmented_output > 0.5)
     labeled_skeleton = label(skeleton, connectivity=2)
@@ -132,11 +128,7 @@ def process_image(image_path, model, is_augmented=False, aug_index=None):
     # Calculate Fractal Dimension
     fractal_dimension = calculate_fractal_dimension(skeleton)
 
-    # Generate identifier for augmented images
-    image_identifier = f"{os.path.basename(image_path)}_aug{aug_index}" if is_augmented else os.path.basename(image_path)
-
     return {
-        'Image': image_identifier,
         'Mean Tortuosity': np.mean(tortuosity_list) if tortuosity_list else None,
         'CRAE': CRAE,
         'CRVE': CRVE,
@@ -144,57 +136,38 @@ def process_image(image_path, model, is_augmented=False, aug_index=None):
         'Fractal Dimension': fractal_dimension,
     }
 
-# Main Processing Function with Augmentation
-def process_dataset_with_augmentation(base_path, model, output_csv, augmentations_per_image=5):
-    results = []
+# Streamlit UI
+def main():
+    st.title("Eye Detection and Vascular Health Analysis")
+    
+    # Uploading images
+    uploaded_right_eye = st.file_uploader("Upload Right Eye Image", type=["jpg", "png"])
+    uploaded_left_eye = st.file_uploader("Upload Left Eye Image", type=["jpg", "png"])
 
-    for condition in ['AD', 'Healthy']:
-        condition_path = os.path.join(base_path, condition)
-        print(f"Processing condition: {condition}, Path: {condition_path}")
-        for subject in os.listdir(condition_path):
-            subject_path = os.path.join(condition_path, subject)
-            print(f"Processing subject: {subject}, Path: {subject_path}")
+    if uploaded_right_eye and uploaded_left_eye:
+        # Read the images into numpy arrays
+        right_eye_image = cv2.imdecode(np.frombuffer(uploaded_right_eye.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+        left_eye_image = cv2.imdecode(np.frombuffer(uploaded_left_eye.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
 
-            for image_file in ['right_eye.jpg', 'left_eye.jpg']:
-                image_path = os.path.join(subject_path, image_file)
-                if os.path.exists(image_path):
-                    print(f"Processing image: {image_file}")
+        # Load the model
+        model_path = 'D:/Projects/retinal-dementia-detection/unet-model/Trained models/retina_attentionUnet_150epochs.hdf5'
+        model = load_segmentation_model(model_path)
 
-                    # Process Original Image
-                    parameters = process_image(image_path, model)
-                    parameters['Condition'] = condition
-                    parameters['Subject'] = subject
-                    results.append(parameters)
+        # Process both images
+        right_eye_params = process_image(right_eye_image, model)
+        left_eye_params = process_image(left_eye_image, model)
 
-                    # Perform Augmentations and Process Each Augmented Image
-                    original_image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-                    for aug_idx in range(augmentations_per_image):
-                        augmented_image = augment_image_realistic(original_image)
+        # Display results in a table
+        data = {
+            'Eye': ['Right', 'Left'],
+            'Mean Tortuosity': [right_eye_params['Mean Tortuosity'], left_eye_params['Mean Tortuosity']],
+            'CRAE': [right_eye_params['CRAE'], left_eye_params['CRAE']],
+            'CRVE': [right_eye_params['CRVE'], left_eye_params['CRVE']],
+            'AVR': [right_eye_params['AVR'], left_eye_params['AVR']],
+            'Fractal Dimension': [right_eye_params['Fractal Dimension'], left_eye_params['Fractal Dimension']]
+        }
+        df = pd.DataFrame(data)
+        st.write(df)
 
-                        # Save augmented image temporarily
-                        augmented_image_path = f"/{subject}_{image_file}_aug{aug_idx}.jpg"
-                        cv2.imwrite(augmented_image_path, augmented_image)
-
-                        # Process augmented image
-                        parameters_aug = process_image(augmented_image_path, model, is_augmented=True, aug_index=aug_idx)
-                        parameters_aug['Condition'] = condition
-                        parameters_aug['Subject'] = subject
-                        results.append(parameters_aug)
-                else:
-                    print(f"Image not found: {image_file} in {subject_path}")
-
-    # Save Results to CSV
-    if results:
-        results_df = pd.DataFrame(results)
-        results_df.to_csv(output_csv, index=False)
-        print(f"Results saved successfully to {output_csv}.")
-    else:
-        print("No results to save. Please check the dataset and processing pipeline.")
-
-# Run the Pipeline
-base_path = 'Data'
-output_csv = 'unet-model/output/vascular_parameters_calculated.csv'
-model_path = 'unet-model/Trained models/retina_attentionUnet_150epochs.hdf5'
-
-model = load_segmentation_model(model_path)
-process_dataset_with_augmentation(base_path, model, output_csv)
+if __name__ == "__main__":
+    main()
