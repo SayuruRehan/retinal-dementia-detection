@@ -6,6 +6,7 @@ from skimage.morphology import skeletonize
 from skimage.measure import label
 from scipy.spatial.distance import euclidean
 from scipy.stats import linregress
+import pickle
 from tensorflow.keras.models import load_model  # type: ignore
 from albumentations import Compose, HorizontalFlip, VerticalFlip, ShiftScaleRotate, RandomBrightnessContrast, ElasticTransform
 
@@ -16,10 +17,21 @@ from model import attentionunet
 input_shape = (256, 256, 1)
 
 def load_segmentation_model(model_path):
-    from model import attentionunet
     model = attentionunet(input_shape=input_shape)
     model.load_weights(model_path)
     return model
+
+# Load the pre-trained Logistic Regression model
+def load_logreg_model(model_path='logreg_model.sav'):
+    with open(model_path, 'rb') as model_file:
+        model = pickle.load(model_file)
+    return model
+
+# Load the scaler
+def load_scaler(scaler_path='scaler.pkl'):
+    with open(scaler_path, 'rb') as scaler_file:
+        scaler = pickle.load(scaler_file)
+    return scaler
 
 # Define augmentation pipeline
 def augment_image_realistic(image):
@@ -136,6 +148,29 @@ def process_image(image, model):
         'Fractal Dimension': fractal_dimension,
     }
 
+# Predict Condition using Logistic Regression model
+def predict_condition(extracted_params, logreg_model, scaler):
+    # Extracted parameters from process_image
+    input_features = np.array([
+        extracted_params['Mean Tortuosity'],
+        extracted_params['CRAE'],
+        extracted_params['CRVE'],
+        extracted_params['AVR'],
+        extracted_params['Fractal Dimension']
+    ]).reshape(1, -1)  # Reshape for model input
+
+    # Apply scaling
+    scaled_features = scaler.transform(input_features)
+    
+    # Make prediction
+    prediction = logreg_model.predict(scaled_features)
+    
+    # Return condition based on prediction (0 for Healthy, 1 for AD)
+    if prediction == 1:
+        return "Alzheimer's Disease (AD)"
+    else:
+        return "Healthy"
+
 # Streamlit UI
 def main():
     st.title("Eye Detection and Vascular Health Analysis")
@@ -152,22 +187,29 @@ def main():
         # Load the model
         model_path = 'unet-model/Trained models/retina_attentionUnet_150epochs.hdf5'
         model = load_segmentation_model(model_path)
+        logreg_model = load_logreg_model('logreg_model.sav')
+        scaler = load_scaler('scaler.pkl')
 
         # Process both images
         right_eye_params = process_image(right_eye_image, model)
         left_eye_params = process_image(left_eye_image, model)
 
-        # Display results in a table
-        data = {
-            'Eye': ['Right', 'Left'],
-            'Mean Tortuosity': [right_eye_params['Mean Tortuosity'], left_eye_params['Mean Tortuosity']],
-            'CRAE': [right_eye_params['CRAE'], left_eye_params['CRAE']],
-            'CRVE': [right_eye_params['CRVE'], left_eye_params['CRVE']],
-            'AVR': [right_eye_params['AVR'], left_eye_params['AVR']],
-            'Fractal Dimension': [right_eye_params['Fractal Dimension'], left_eye_params['Fractal Dimension']]
-        }
-        df = pd.DataFrame(data)
-        st.write(df)
+        # Predict the condition based on extracted parameters
+        right_eye_condition = predict_condition(right_eye_params, logreg_model, scaler)
+        left_eye_condition = predict_condition(left_eye_params, logreg_model, scaler)
+
+        # Display results
+        st.subheader("Right Eye Analysis")
+        st.table(pd.DataFrame([right_eye_params]))
+
+        st.subheader(f"Prediction: {right_eye_condition}")
+
+        st.subheader("Left Eye Analysis")
+        st.table(pd.DataFrame([left_eye_params]))
+
+        st.subheader(f"Prediction: {left_eye_condition}")
+    else:
+        st.warning("Please upload both right and left eye images")
 
 if __name__ == "__main__":
     main()
